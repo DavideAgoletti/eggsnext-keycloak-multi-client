@@ -10,12 +10,15 @@ permissions:
   contents: write
   pull-requests: write
   workflow: write
-  
+
 jobs:
   update-options:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Usiamo il PAT invece del GITHUB_TOKEN standard
+          token: ${{ secrets.MY_SECRET }}
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -34,6 +37,7 @@ jobs:
         with:
           commit-message: 'ci: update workflow options with latest Keycloak versions'
           title: 'chore: update available Keycloak versions and clients'
+          token: ${{ secrets.MY_SECRET }}
           body: |
             Aggiornamento automatico delle opzioni del workflow:
             - Versioni Keycloak recuperate da Quay.io
