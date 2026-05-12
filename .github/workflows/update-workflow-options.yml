@@ -5,12 +5,6 @@ on:
     - cron: '0 9 * * 1'
   workflow_dispatch:
 
-# Anche se usiamo il PAT, teniamo questi per sicurezza
-permissions:
-  contents: write
-  pull-requests: write
-  workflow: write
-
 jobs:
   update-options:
     runs-on: ubuntu-latest
@@ -19,7 +13,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.MY_SECRET }}
-          # 1. FONDAMENTALE: Impedisce a Git di usare le credenziali temporanee limitate
           persist-credentials: false
 
       - name: Set up Python
@@ -28,23 +21,16 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: |
-          pip install pyyaml requests
+        run: pip install pyyaml requests
 
       - name: Update workflow options
-        # Qui il tuo script Python userà i dati della tua Custom Action
-        # o chiamerà direttamente Quay.io
         run: python .github/workflows/update-workflow-options.py
 
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v5
         with:
           token: ${{ secrets.MY_SECRET }}
-          commit-message: 'ci: update workflow options with latest Keycloak versions'
-          title: 'chore: update available Keycloak versions and clients'
-          body: |
-            Aggiornamento automatico delle opzioni del workflow:
-            - Versioni Keycloak recuperate da Quay.io
-            - Client recuperati dalla struttura
+          commit-message: 'ci: update workflow options'
+          title: 'chore: update versions'
           branch: update/workflow-options
           delete-branch: true
