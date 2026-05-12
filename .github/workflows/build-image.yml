@@ -9,42 +9,127 @@ on:
   workflow_dispatch:
     inputs:
       client:
-        description: 'Client name (leave empty for all)'
-        required: false
+        description: 'Seleziona cliente'
+        required: true
+        type: choice
+        options:
+          - all  # Opzione speciale per buildare tutti
       keycloak_version:
-        description: 'Keycloak version'
-        required: false
-        default: '24.0.0'
+        description: 'Seleziona versione Keycloak'
+        required: true
+        type: choice
+        options:
+          - latest
 
 env:
   REGISTRY: ghcr.io
   REGISTRY_USERNAME: ${{ github.actor }}
 
 jobs:
+  # Job 1: Recupera versioni disponibili da Keycloak
+  fetch-versions:
+    runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.get-versions.outputs.versions }}
+      versions_json: ${{ steps.get-versions.outputs.versions_json }}
+    steps:
+      - name: Fetch Keycloak versions from API
+        id: get-versions
+        run: |
+          # Recupera le versioni da Quay.io API
+          RESPONSE=$(curl -s https://quay.io/api/v1/repository/keycloak/keycloak/tag)
+          
+          # Estrai le ultimi 15 tag (escludendo latest e alpha/beta)
+          VERSIONS=$(echo "$RESPONSE" | jq -r '.tags[].name' | \
+            grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | \
+            sort -V -r | head -15 | \
+            jq -R -s -c 'split("\n")[:-1]')
+          
+          # Formato per GitHub Actions choice (uno per riga)
+          VERSIONS_CHOICE=$(echo "$RESPONSE" | jq -r '.tags[].name' | \
+            grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | \
+            sort -V -r | head -15)
+          
+          echo "versions=$VERSIONS_CHOICE" >> $GITHUB_OUTPUT
+          echo "versions_json=$(echo $VERSIONS | jq -c .)" >> $GITHUB_OUTPUT
+          
+          # Debug
+          echo "Versioni disponibili:"
+          echo "$VERSIONS_CHOICE"
+
+  # Job 2: Recupera i client disponibili
+  fetch-clients:
+    runs-on: ubuntu-latest
+    outputs:
+      clients: ${{ steps.get-clients.outputs.clients }}
+      clients_json: ${{ steps.get-clients.outputs.clients_json }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get available clients
+        id: get-clients
+        run: |
+          # Elenca tutte le cartelle in clients/
+          CLIENTS=$(ls -d clients/*/ 2>/dev/null | sed 's|clients/||g' | sed 's|/||g' | sort)
+          
+          # Converti in formato JSON array
+          CLIENTS_JSON=$(echo "$CLIENTS" | jq -R -s -c 'split("\n")[:-1]')
+          
+          # Formato per GitHub Actions choice (uno per riga)
+          CLIENTS_CHOICE=$(echo -e "all\n$CLIENTS")
+          
+          echo "clients=$CLIENTS_CHOICE" >> $GITHUB_OUTPUT
+          echo "clients_json=$(echo $CLIENTS_JSON)" >> $GITHUB_OUTPUT
+          
+          # Debug
+          echo "Client disponibili:"
+          echo "$CLIENTS_CHOICE"
+
+  # Job 3: Valida gli input
+  validate-inputs:
+    needs: [fetch-clients, fetch-versions]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Display selections
+        run: |
+          echo "Client selezionato: ${{ github.event.inputs.client }}"
+          echo "Versione Keycloak: ${{ github.event.inputs.keycloak_version }}"
+          echo ""
+          echo "Client disponibili: ${{ needs.fetch-clients.outputs.clients }}"
+          echo "Versioni disponibili: ${{ needs.fetch-versions.outputs.versions }}"
+
+  # Job 4: Determina quali client buildare
   detect-clients:
+    needs: [fetch-clients, validate-inputs]
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Detect clients
+      - name: Determine clients to build
         id: set-matrix
         run: |
-          if [ -z "${{ github.event.inputs.client }}" ]; then
-            # Se non specificato, build tutti i client
-            clients=$(ls -d clients/*/ | sed 's|clients/||g' | sed 's|/||g' | jq -R -s -c 'split("\n")[:-1]')
+          CLIENT_INPUT="${{ github.event.inputs.client }}"
+          
+          if [ "$CLIENT_INPUT" = "all" ]; then
+            # Prendi tutti i client
+            CLIENTS=$(ls -d clients/*/ | sed 's|clients/||g' | sed 's|/||g' | jq -R -s -c 'split("\n")[:-1]')
           else
-            # Altrimenti build solo il client specificato
-            clients=$(echo "${{ github.event.inputs.client }}" | jq -R -s -c 'split("\n")[:-1]')
+            # Usa il client selezionato
+            CLIENTS=$(echo "$CLIENT_INPUT" | jq -R -s -c 'split("\n")[:-1]')
           fi
-          echo "matrix={\"client\":$(echo $clients | jq -c .)}" >> $GITHUB_OUTPUT
+          
+          echo "matrix={\"client\":$(echo $CLIENTS | jq -c .)}" >> $GITHUB_OUTPUT
+          echo "Matrix: {\"client\":$(echo $CLIENTS | jq -c .)}"
 
+  # Job 5: Build e push delle immagini
   build:
-    needs: detect-clients
+    needs: [detect-clients, fetch-versions]
     runs-on: ubuntu-latest
     strategy:
       matrix: ${{ fromJson(needs.detect-clients.outputs.matrix) }}
+      fail-fast: false
     permissions:
       contents: read
       packages: write
@@ -65,22 +150,34 @@ jobs:
       - name: Extract metadata
         id: meta
         run: |
-          # Leggi la versione di Keycloak dal file config del cliente
-          if [ -f "clients/${{ matrix.client }}/config.env" ]; then
-            KC_VERSION=$(grep KEYCLOAK_VERSION clients/${{ matrix.client }}/config.env | cut -d= -f2)
-          else
+          # Se la versione è specificata, usala
+          if [ -n "${{ github.event.inputs.keycloak_version }}" ]; then
             KC_VERSION="${{ github.event.inputs.keycloak_version }}"
-            KC_VERSION="${KC_VERSION:-24.0.0}"
+          else
+            # Altrimenti leggi dal file config del cliente
+            if [ -f "clients/${{ matrix.client }}/config.env" ]; then
+              KC_VERSION=$(grep KEYCLOAK_VERSION clients/${{ matrix.client }}/config.env | cut -d= -f2 | tr -d ' ')
+            else
+              KC_VERSION="latest"
+            fi
           fi
           
+          IMAGE_TAG="${{ env.REGISTRY }}/${{ github.repository }}/keycloak-${{ matrix.client }}"
+          
           echo "keycloak-version=$KC_VERSION" >> $GITHUB_OUTPUT
-          echo "image-tag=${{ env.REGISTRY }}/${{ github.repository }}/keycloak-${{ matrix.client }}" >> $GITHUB_OUTPUT
+          echo "image-tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+          
+          echo "🏗️ Building: ${{ matrix.client }}"
+          echo "📦 Version: $KC_VERSION"
+          echo "🏷️ Image: $IMAGE_TAG"
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: ./clients/${{ matrix.client }}
           push: true
+          build-args: |
+            KEYCLOAK_VERSION=${{ steps.meta.outputs.keycloak-version }}
           tags: |
             ${{ steps.meta.outputs.image-tag }}:${{ steps.meta.outputs.keycloak-version }}
             ${{ steps.meta.outputs.image-tag }}:${{ steps.meta.outputs.keycloak-version }}-${{ github.sha }}
@@ -88,7 +185,25 @@ jobs:
           labels: |
             org.opencontainers.image.title=Keycloak-${{ matrix.client }}
             org.opencontainers.image.version=${{ steps.meta.outputs.keycloak-version }}
-            org.opencontainers.image.vendor=Your-Company
+            org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
 
       - name: Image digest
-        run: echo ${{ steps.docker_build.outputs.digest }}
+        run: |
+          echo "✅ Image built successfully!"
+          echo "Repository: ${{ steps.meta.outputs.image-tag }}"
+          echo "Tag: ${{ steps.meta.outputs.keycloak-version }}"
+
+  # Job 6: Notifica completamento
+  notify:
+    needs: [build, detect-clients]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Build Summary
+        run: |
+          echo "🎉 Build completato!"
+          echo ""
+          echo "Cliente: ${{ github.event.inputs.client }}"
+          echo "Versione: ${{ github.event.inputs.keycloak_version }}"
+          echo "Status: ${{ job.status }}"

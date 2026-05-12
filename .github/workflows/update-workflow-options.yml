@@ -1,0 +1,41 @@
+name: Update Workflow Options
+
+on:
+  schedule:
+    # Ogni lunedì alle 9:00 UTC
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-options:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install pyyaml requests
+
+      - name: Update workflow options
+        run: python .github/workflows/update-workflow-options.py
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v5
+        with:
+          commit-message: 'ci: update workflow options with latest Keycloak versions'
+          title: 'chore: update available Keycloak versions and clients'
+          body: |
+            Aggiornamento automatico delle opzioni del workflow:
+            - Versioni Keycloak recuperate da Quay.io
+            - Client recuperati dalla struttura
+          branch: update/workflow-options
+          delete-branch: true
