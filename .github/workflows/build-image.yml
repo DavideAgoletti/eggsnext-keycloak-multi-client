@@ -13,12 +13,24 @@ true:
         type: choice
         options:
         - all
+        - errevi
+        - errezeta
+        - papalini
+        - poma
       keycloak_version:
         description: "\U0001F4E6 Seleziona versione Keycloak (aggiornate quotidianamente)"
         required: true
         type: choice
         options:
         - 26.6.1
+        - 25.0.6
+        - 24.0.5
+        - 23.0.7
+        - 22.0.5
+        - 21.1.2
+        - 20.0.5
+        - 19.0.3
+        - 18.0.2
 env:
   REGISTRY: ghcr.io
 jobs:
