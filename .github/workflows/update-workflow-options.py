@@ -75,7 +75,7 @@ def update_workflow(versions, clienti):
         with open(workflow_path, 'r') as f:
             workflow = yaml.safe_load(f)
 
-        # In PyYAML 'on:' viene letto come True
+        # PyYAML legge 'on:' come il booleano True
         trigger = True
         if trigger in workflow:
             inputs = workflow[trigger]['workflow_dispatch']['inputs']
@@ -83,13 +83,17 @@ def update_workflow(versions, clienti):
             inputs['keycloak_version']['options'] = versions
 
             with open(workflow_path, 'w') as f:
-                yaml.dump(workflow, f, default_flow_style=False, sort_keys=False)
+                # allow_unicode=True serve per non trasformare le emoji in codici brutti
+                yaml.dump(workflow, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
-            # Ripristina 'on:' al posto di 'True:'
+            # LEGGI E CORREGGI: Dobbiamo cercare 'true:' (minuscolo) e rimettere 'on:'
             with open(workflow_path, 'r') as f:
                 content = f.read()
+
             with open(workflow_path, 'w') as f:
-                f.write(content.replace('True:', 'on:'))
+                # Sostituiamo sia 'true:' che 'True:' per sicurezza
+                content = content.replace('true:', 'on:').replace('True:', 'on:')
+                f.write(content)
             return True
     except Exception as e:
         print(f"❌ Errore aggiornamento file: {e}")

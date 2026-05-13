@@ -1,5 +1,5 @@
 name: Build Keycloak Images
-true:
+on:
   push:
     branches:
     - main
