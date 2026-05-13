@@ -1,0 +1,101 @@
+name: manual-workflow-options.yml
+
+on:
+  workflow_dispatch:
+    inputs:
+      client:
+        description: '🎯 Seleziona cliente'
+        required: true
+        type: choice
+        options:
+          - all
+          - errevi
+          - errezeta
+          - papalini
+          - poma
+      custom_version:
+        description: '📦 Inserisci versione manuale (es: 26.0.0)'
+        required: true
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  validate-and-prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      repo_lower: ${{ steps.repo.outputs.name }}
+      matrix: ${{ steps.matrix.outputs.data }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # 1. TRASFORMA REPO IN MINUSCOLO (per evitare l'errore 403/invalid tag)
+      - name: Prepare repository name
+        id: repo
+        run: echo "name=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
+      # 2. VERIFICA SE LA VERSIONE ESISTE SU QUAY.IO
+      - name: Validate Keycloak Version
+        run: |
+          VERSION="${{ github.event.inputs.custom_version }}"
+          echo "🔍 Verifica disponibilità versione $VERSION su Quay.io..."
+          
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://quay.io/api/v1/repository/keycloak/keycloak/tag/$VERSION")
+          
+          if [ "$HTTP_STATUS" -ne 200 ]; then
+            echo "::error title=Versione Non Disponibile::La versione $VERSION non è stata trovata su Quay.io (Errore HTTP $HTTP_STATUS). Controlla la sintassi X.X.X"
+            exit 1
+          else
+            echo "✅ Versione $VERSION valida e disponibile!"
+          fi
+
+      # 3. GENERA MATRIX CLIENTI
+      - name: List clients
+        id: clients
+        run: |
+          LIST=$(ls -d clients/*/ 2>/dev/null | sed 's|clients/||g' | sed 's|/||g' | sort | jq -R -s -c 'split("\n")[:-1]')
+          echo "list=$LIST" >> $GITHUB_OUTPUT
+
+      - name: Generate matrix
+        id: matrix
+        run: |
+          if [ "${{ github.event.inputs.client }}" = "all" ]; then
+            MATRIX='${{ steps.clients.outputs.list }}'
+          else
+            MATRIX='["${{ github.event.inputs.client }}"]'
+          fi
+          echo "data={\"client\":$(echo $MATRIX | jq -c .)}" >> $GITHUB_OUTPUT
+
+  build:
+    needs: validate-and-prepare
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: ${{ fromJson(needs.validate-and-prepare.outputs.matrix) }}
+      fail-fast: false
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: ./clients/${{ matrix.client }}
+          push: true
+          build-args: |
+            KEYCLOAK_VERSION=${{ github.event.inputs.custom_version }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ needs.validate-and-prepare.outputs.repo_lower }}/keycloak-${{ matrix.client }}:${{ github.event.inputs.custom_version }}
+            ${{ env.REGISTRY }}/${{ needs.validate-and-prepare.outputs.repo_lower }}/keycloak-${{ matrix.client }}:latest
