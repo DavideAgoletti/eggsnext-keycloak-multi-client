@@ -8,27 +8,17 @@ true:
   workflow_dispatch:
     inputs:
       client:
-        description: 🎯 Seleziona cliente
+        description: "\U0001F3AF Seleziona cliente"
         required: true
         type: choice
         options:
         - all
-        - errevi
-        - errezeta
-        - papalini
-        - poma
       keycloak_version:
-        description: 📦 Seleziona versione Keycloak (aggiornate quotidianamente)
+        description: "\U0001F4E6 Seleziona versione Keycloak (aggiornate quotidianamente)"
         required: true
         type: choice
         options:
         - 26.6.1
-        - 26.5.7
-        - 26.4.7
-        - 26.3.5
-        - 26.2.5
-        - 26.1.5
-        - 26.0.8
 env:
   REGISTRY: ghcr.io
 jobs:
@@ -107,14 +97,6 @@ jobs:
 
           '
     - name: Image Summary
-      run: 'echo "✅ Build completato!"
-
-        echo ""
-
-        echo "📊 Dettagli:"
-
-        echo "   Cliente: ${{ matrix.client }}"
-
-        echo "   Versione: ${{ github.event.inputs.keycloak_version }}"
-
-        echo "   Registry: ${{ env.REGISTRY }}"'
+      run: "echo \"\u2705 Build completato!\"\necho \"\"\necho \"\U0001F4CA Dettagli:\"\
+        \necho \"   Cliente: ${{ matrix.client }}\"\necho \"   Versione: ${{ github.event.inputs.keycloak_version\
+        \ }}\"\necho \"   Registry: ${{ env.REGISTRY }}\""
