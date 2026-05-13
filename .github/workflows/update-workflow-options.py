@@ -5,98 +5,105 @@ import sys
 import re
 import subprocess
 
-def get_keycloak_versions(limit=20):
-    """Recupera l'ultima versione stabile per ogni Major release (>= 18)"""
+def get_keycloak_versions():
+    """Recupera le versioni Major (dalla 18 alla più recente) paginando l'API"""
+    latest_per_major = {}
+    page = 1
+    has_additional = True
+
+    print("🔍 Ricerca versioni Major (dalla 26 alla 18)...")
+
     try:
-        # Aumentiamo il limite a 1000 per essere sicuri di arrivare alla versione 18
-        # Keycloak ha moltissimi tag tra patch e versioni candidate.
-        response = requests.get(
-            'https://quay.io/api/v1/repository/keycloak/keycloak/tag?limit=1000',
-            timeout=15
-        )
-        response.raise_for_status()
+        # Continua a cercare finché ci sono pagine o finché non abbiamo coperto il range
+        while has_additional and page < 10:  # Limite di sicurezza a 10 pagine
+            url = f'https://quay.io/api/v1/repository/keycloak/keycloak/tag/?limit=100&page={page}'
+            response = requests.get(url, timeout=15)
+            response.raise_for_status()
+            data = response.json()
 
-        tags = response.json().get('tags', [])
-        all_stable = []
+            tags = data.get('tags', [])
+            if not tags:
+                break
 
-        for tag in tags:
-            name = tag.get('name', '')
-            # Filtro rigoroso: solo X.Y.Z stabili
-            if re.match(r'^\d+\.\d+\.\d+$', name):
-                if not any(x in name.lower() for x in ['alpha', 'beta', 'rc', 'dev', 'snapshot']):
-                    all_stable.append(name)
+            for tag in tags:
+                name = tag.get('name', '')
+                # Filtro X.Y.Z stabile
+                if re.match(r'^\d+\.\d+\.\d+$', name):
+                    if not any(x in name.lower() for x in ['alpha', 'beta', 'rc', 'dev', 'snapshot']):
+                        major = int(name.split('.')[0])
 
-        # Ordina tutte le versioni in modo decrescente numerico
-        all_stable.sort(key=lambda x: tuple(map(int, x.split('.'))), reverse=True)
+                        # Se è una major che ci interessa (>= 18) e non l'abbiamo ancora salvata
+                        if major >= 18:
+                            # Poiché l'API restituisce i tag dal più recente,
+                            # la prima che troviamo per ogni Major è la patch più alta
+                            if major not in latest_per_major:
+                                latest_per_major[major] = name
+                                print(f"   ⭐ Trovata Major {major}: {name}")
 
-        # LOGICA: Teniamo solo la più recente per ogni numero MAJOR
-        latest_per_major = {}
-        for v in all_stable:
-            major = int(v.split('.')[0])
-            # Consideriamo solo dalla 18 in su come richiesto
-            if major >= 18:
-                if major not in latest_per_major:
-                    latest_per_major[major] = v
+            has_additional = data.get('has_additional', False)
+            page += 1
 
-        # Estraiamo le versioni e ordiniamole (dalla 26 alla 18)
-        filtered_versions = [latest_per_major[m] for m in sorted(latest_per_major.keys(), reverse=True)]
+        # Ordiniamo i risultati (26, 25, 24...)
+        sorted_majors = sorted(latest_per_major.keys(), reverse=True)
+        filtered_versions = [latest_per_major[m] for m in sorted_majors]
 
-        print(f"✅ Trovate {len(filtered_versions)} versioni Major (18 -> {max(latest_per_major.keys())})")
-        for v in filtered_versions:
-            print(f"   - {v}")
-
-        return filtered_versions[:limit]
+        return filtered_versions
 
     except Exception as e:
-        print(f"❌ Errore nel recuperare versioni: {e}", file=sys.stderr)
+        print(f"❌ Errore API: {e}", file=sys.stderr)
         return []
 
 def get_available_clienti():
-    """Recupera i clienti disponibili dalla cartella clienti/"""
-    try:
-        # Nota: usiamo 'clients' se la tua cartella si chiama così nel repo
-        result = subprocess.run(
-            ["ls", "-d", "clients/*/"],
-            capture_output=True,
-            text=True
-        )
-        clienti = [
-            d.split('/')[-2] for d in result.stdout.strip().split('\n')
-            if d and 'clients/' in d
-        ]
-        return sorted(clienti)
-    except:
-        return ["errevi", "errezeta", "papalini", "poma"]
+    """Rileva i clienti basandosi sulle cartelle presenti"""
+    # Cerchiamo sia 'clients' che 'clienti' per sicurezza
+    for folder in ['clients', 'clienti']:
+        try:
+            result = subprocess.run(
+                ["ls", "-d", f"{folder}/*/"],
+                capture_output=True, text=True
+            )
+            if result.returncode == 0:
+                return sorted([d.split('/')[-2] for d in result.stdout.strip().split('\n') if d])
+        except:
+            continue
+    return ["errevi", "errezeta", "papalini", "poma"]
 
 def update_workflow(versions, clienti):
-    """Aggiorna build-image.yml"""
+    """Aggiorna il file build-image.yml"""
     workflow_path = '.github/workflows/build-image.yml'
     try:
         with open(workflow_path, 'r') as f:
             workflow = yaml.safe_load(f)
 
-        # Aggiorna le opzioni nel file YAML
-        # PyYAML legge 'on:' come True
+        # In PyYAML 'on:' viene letto come True
         trigger = True
-        workflow[trigger]['workflow_dispatch']['inputs']['client']['options'] = ['all'] + clienti
-        workflow[trigger]['workflow_dispatch']['inputs']['keycloak_version']['options'] = versions
+        if trigger in workflow:
+            inputs = workflow[trigger]['workflow_dispatch']['inputs']
+            inputs['client']['options'] = ['all'] + clienti
+            inputs['keycloak_version']['options'] = versions
 
-        with open(workflow_path, 'w') as f:
-            yaml.dump(workflow, f, default_flow_style=False, sort_keys=False)
+            with open(workflow_path, 'w') as f:
+                yaml.dump(workflow, f, default_flow_style=False, sort_keys=False)
 
-        # Correzione post-scrittura per ripristinare 'on:' invece di 'True:'
-        with open(workflow_path, 'r') as f:
-            lines = f.readlines()
-        with open(workflow_path, 'w') as f:
-            for line in lines:
-                f.write(line.replace('True:', 'on:'))
-        return True
+            # Ripristina 'on:' al posto di 'True:'
+            with open(workflow_path, 'r') as f:
+                content = f.read()
+            with open(workflow_path, 'w') as f:
+                f.write(content.replace('True:', 'on:'))
+            return True
     except Exception as e:
-        print(f"Errore update: {e}")
+        print(f"❌ Errore aggiornamento file: {e}")
         return False
 
 if __name__ == '__main__':
-    versions = get_keycloak_versions(20)
+    versions = get_keycloak_versions()
     clienti = get_available_clienti()
-    if versions and update_workflow(versions, clienti):
-        print("🎉 Workflow aggiornato con successo!")
+
+    if versions:
+        if update_workflow(versions, clienti):
+            print(f"\n🎉 Successo! Inserite {len(versions)} versioni nel dropdown.")
+        else:
+            sys.exit(1)
+    else:
+        print("❌ Nessuna versione trovata.")
+        sys.exit(1)
