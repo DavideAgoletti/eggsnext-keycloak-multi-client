@@ -14,8 +14,9 @@ import re
 def get_keycloak_versions(limit=20):
     """Recupera le versioni e filtra per mostrare solo le ultime di ogni release Minor"""
     try:
+        # Aumentiamo il limite a 500 per raggiungere le versioni più vecchie (25, 24, ecc.)
         response = requests.get(
-            'https://quay.io/api/v1/repository/keycloak/keycloak/tag?limit=100',
+            'https://quay.io/api/v1/repository/keycloak/keycloak/tag?limit=500',
             timeout=10
         )
         response.raise_for_status()
@@ -25,33 +26,29 @@ def get_keycloak_versions(limit=20):
 
         for tag in tags:
             name = tag.get('name', '')
-            # Filtro base: X.Y.Z stabili
+            # Filtro base: solo versioni stabili X.Y.Z
             if re.match(r'^\d+\.\d+\.\d+$', name):
                 if not any(x in name.lower() for x in ['alpha', 'beta', 'rc', 'dev', 'snapshot']):
                     all_stable.append(name)
 
-        # Ordina tutte le versioni dalla più recente alla più vecchia
+        # Ordina dalla più recente
         all_stable.sort(key=lambda x: tuple(map(int, x.split('.'))), reverse=True)
 
-        # LOGICA DI FILTRO: Teniamo solo la versione più recente per ogni "Major.Minor"
+        # Raggruppa per Major.Minor e tieni solo l'ultima patch
         latest_per_minor = {}
         for v in all_stable:
-            major_minor = ".".join(v.split('.')[:2]) # Es: "26.0"
+            major_minor = ".".join(v.split('.')[:2])
             if major_minor not in latest_per_minor:
                 latest_per_minor[major_minor] = v
 
-        # Trasformiamo il dizionario in una lista ordinata
         filtered_versions = list(latest_per_minor.values())
         filtered_versions.sort(key=lambda x: tuple(map(int, x.split('.'))), reverse=True)
 
-        print(f"✅ Filtrate {len(filtered_versions)} versioni uniche per release")
-        for v in filtered_versions[:5]:
-            print(f"   - {v}")
-
+        print(f"✅ Filtrate {len(filtered_versions)} versioni uniche")
         return filtered_versions[:limit]
 
     except Exception as e:
-        print(f"❌ Errore nel recuperare versioni: {e}", file=sys.stderr)
+        print(f"❌ Errore: {e}", file=sys.stderr)
         return []
 def get_available_clienti():
     """Recupera i clienti disponibili dalla struttura clienti/"""
